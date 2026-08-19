@@ -18,17 +18,17 @@ pipeline for scientific visualization that:
 ## Why this architecture minimizes hallucination (design rationale)
 
 Every stage below was chosen not just for restoration quality but for a
-specific, inspectable reason it *can't* invent scene content it wasn't given:
+specific, inspectable reason it _can't_ invent scene content it wasn't given:
 
-| Stage | Role | Anti-hallucination property |
-|---|---|---|
-| `physics_frontend` | Radiometric calibration, cosmic-ray scrubbing, Anscombe VST | Purely physics-based, zero learned weights — every correction traces to a calibration constant |
-| `wavelet_dequant` (SWT) | Splits image into illumination (LL) vs. detail (LH/HL/HH) bands | Shift-invariant decomposition avoids block-edge artifacts a decimated transform would introduce |
-| `wavelet_dequant` (dequantizer) | Removes 16-bit banding artifacts | Correction is hard-clamped to ±½ quantization step — architecturally incapable of inventing structure larger than one bin |
-| `zero_dce` | Illumination enhancement (LL band only) | Applies only a monotonic per-pixel tone curve — cannot synthesize new spatial structure, and needs no paired "ground truth bright" data that doesn't exist for planetary scenes |
-| `nafnet_denoiser` | Detail restoration (LH/HL/HH bands) | Activation-free design (SimpleGate + Simplified Channel Attention replace nonlinear MLP gates) — fewer nonlinear degrees of freedom to fabricate plausible-but-fictitious texture |
-| `uncertainty_head` | Per-pixel (μ, log-var) → trust map | Every output pixel ships a confidence value; low-confidence regions are surfaced to the scientist rather than silently presented as fact |
-| `evaluation.metrics` | SSIM structure guardrail | Flags any run where enhanced-vs-calibrated-raw structural similarity falls below a configurable threshold |
+| Stage                           | Role                                                            | Anti-hallucination property                                                                                                                                                       |
+| ------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `physics_frontend`              | Radiometric calibration, cosmic-ray scrubbing, Anscombe VST     | Purely physics-based, zero learned weights — every correction traces to a calibration constant                                                                                    |
+| `wavelet_dequant` (SWT)         | Splits image into illumination (LL) vs. detail (LH/HL/HH) bands | Shift-invariant decomposition avoids block-edge artifacts a decimated transform would introduce                                                                                   |
+| `wavelet_dequant` (dequantizer) | Removes 16-bit banding artifacts                                | Correction is hard-clamped to ±½ quantization step — architecturally incapable of inventing structure larger than one bin                                                         |
+| `zero_dce`                      | Illumination enhancement (LL band only)                         | Applies only a monotonic per-pixel tone curve — cannot synthesize new spatial structure, and needs no paired "ground truth bright" data that doesn't exist for planetary scenes   |
+| `nafnet_denoiser`               | Detail restoration (LH/HL/HH bands)                             | Activation-free design (SimpleGate + Simplified Channel Attention replace nonlinear MLP gates) — fewer nonlinear degrees of freedom to fabricate plausible-but-fictitious texture |
+| `uncertainty_head`              | Per-pixel (μ, log-var) → trust map                              | Every output pixel ships a confidence value; low-confidence regions are surfaced to the scientist rather than silently presented as fact                                          |
+| `evaluation.metrics`            | SSIM structure guardrail                                        | Flags any run where enhanced-vs-calibrated-raw structural similarity falls below a configurable threshold                                                                         |
 
 ## Project structure
 
@@ -73,7 +73,7 @@ raw 16-bit DN
 ## Installation
 
 ```bash
-cd aura_net
+cd backend
 pip install -r requirements.txt
 ```
 
@@ -90,22 +90,23 @@ Generates a synthetic low-light, noisy, low-dynamic-range scene (with
 injected cosmic-ray hits) and runs it through the full pipeline:
 
 ```bash
-python aura_pipeline.py --demo
+python backend_pipeline.py --demo
 ```
 
 ### Process a real scene
 
 ```bash
-python aura_pipeline.py --input data/raw/your_scene.tif --output-dir data/output
+python backend_pipeline.py --input data/raw/your_scene.tif --output-dir data/output
 ```
 
 ### With trained weights
 
 ```bash
-python aura_pipeline.py --input data/raw/your_scene.tif --checkpoint checkpoints/auranet_v1.pt
+python backend_pipeline.py --input data/raw/your_scene.tif --checkpoint checkpoints/auranet_v1.pt
 ```
 
 Each run writes, into `--output-dir`:
+
 - `<name>_enhanced.tif` — enhanced image (band 1) + trust map (band 2), CRS/transform preserved from the input
 - `<name>_trust.tif` — standalone trust map GeoTIFF
 - `<name>_metrics.json` — PSNR, SSIM, NIQE, BRISQUE, entropy gain, guardrail pass/fail, cosmic-ray/low-trust/saturation pixel fractions
