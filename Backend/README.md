@@ -1,4 +1,4 @@
-# AuraNet — AI-Assisted Planetary Image Enhancement Pipeline
+#  AI-Assisted Planetary Image Enhancement Pipeline
 
 ## Problem statement
 
