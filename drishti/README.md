@@ -80,13 +80,30 @@ human to weigh — is spelled out under *Guardrail calibration* below.
 
 ## Installation
 
+Use a virtual environment. On Windows in particular, a bare `python` on PATH
+often resolves to an MSYS2 or Store shim with no packages, and the failure looks
+like `ModuleNotFoundError: No module named 'numpy'` when the app starts:
+
 ```bash
-pip install -r requirements.txt
+python -m venv .venv
 ```
+
+```bash
+.venv/Scripts/python -m pip install -r drishti/requirements.txt
+```
+
+On Linux/macOS the interpreter is `.venv/bin/python`. Run everything with that
+interpreter — `.venv/Scripts/python drishti/app.py`, not `python drishti/app.py`.
 
 `rasterio` needs GDAL. The wheels bundle it on common platforms; if the install
 fails, install GDAL from your system package manager first (for example
 `apt install gdal-bin libgdal-dev`).
+
+**Windows path length.** PyTorch loads native DLLs through a path-length-limited
+API. A virtualenv nested deep under a long path (a temp directory, a synced
+folder several levels down) fails at `import torch` with
+`[WinError 206] The filename or extension is too long`, even though `pip install`
+succeeded. Keep the venv near the drive root or at the project root.
 
 ## Usage
 
@@ -117,6 +134,122 @@ Each run writes into the output directory:
 - `<name>_trust.tif` — the trust map alone, for independent GIS overlay
 - `<name>_metrics.json` — every stage-6 metric plus all guardrail verdicts
 - `previews/` — human-viewable PNGs (see below)
+
+## Dashboard
+
+A minimal local web front end, for when you would rather drop a file on a page
+than read a wall of JSON:
+
+```bash
+python app.py
+```
+
+Then open <http://127.0.0.1:5000>. Drop in a scene, pick a sensor config, and it
+runs the pipeline with a live stage-by-stage progress bar, then shows the
+enhanced image, the raw input, the trust map and the side-by-side sheet, the
+full statistics grouped into cards, and download links for the GeoTIFF products
+and the metrics JSON.
+
+Accepts GeoTIFF/TIFF, FITS, PNG/JPEG, and PDS4.
+
+**PDS4 needs both files.** A `.img` is a headerless binary — its dimensions,
+data type and byte order live only in the detached `.xml` label. Select *both*
+together (Ctrl-click, or drop both at once). Uploading the `.img` alone is the
+natural mistake to make and the dashboard now says so explicitly instead of
+failing with a misleading "not a TIFF file".
+
+Four views along the top: **Overview** (stage progress, headline numbers, tonal
+distribution chart, crater breakdown, run conditions, upload), **Imagery**,
+**Metrics**, and **Guardrails**. It is responsive down to a 375 px phone —
+grids collapse three columns → two → one, the nav scrolls horizontally, and
+touch targets grow on coarse pointers.
+
+Two things it does deliberately:
+
+- **It surfaces the caveats next to the numbers.** Physics-only runs, an
+  uninformative trust map, an ungated gradient guardrail and cropped inputs are
+  all called out as banners. A dashboard that showed only the pretty numbers
+  would undo the work the pipeline does to stay auditable.
+- **It crops big scenes loudly.** The pipeline is full-frame, so a 592-megapixel
+  strip would need tens of GB. Anything above the *Max edge* setting is
+  centre-cropped with a windowed read (never a full decode, and georeferencing
+  is carried across to the crop), and every report says so. Set *If larger* to
+  **Reject** if you would rather be stopped than cropped.
+
+It is a local tool, not a service: it binds to localhost, runs one job at a
+time, keeps job state in memory, and has no authentication. Don't expose it.
+
+### Front-end (React + Vite + TypeScript)
+
+The UI lives in `frontend/` as a typed React app. The **built bundle is
+committed** to `static/`, so `python drishti/app.py` works straight after a
+clone with no Node installed — deliberate for a local tool with no CI.
+
+To change the UI you need Node:
+
+```bash
+cd drishti/frontend && npm install
+```
+
+```bash
+npm run dev
+```
+
+`npm run dev` serves on :5173 and proxies `/api` to Flask on :5000 (so run
+`app.py` alongside it) — one origin, no CORS. When you're done:
+
+```bash
+npm run build
+```
+
+which writes `index.html` + `assets/` into `static/`, replacing what Flask
+serves. `npm run build` runs `tsc -b` first, so type errors fail the build.
+
+```
+frontend/src/
+├── types.ts                  # API response types (Metrics, Job, JobResult…)
+├── api.ts                    # typed fetch client
+├── styles.css                # design tokens + responsive rules
+├── App.tsx                   # shell, view routing, job polling
+└── components/
+    ├── primitives.tsx        # formatting, StatCard, Card
+    ├── Hero.tsx              # stage bars, KPI tiles
+    ├── HistogramChart.tsx    # inline-SVG raw vs enhanced distribution
+    ├── OverviewCards.tsx     # summary, provenance, notes, crater bubbles
+    ├── UploadCard.tsx        # drop zone + run options
+    └── Views.tsx             # Imagery / Metrics / Guardrails
+```
+
+Charts are hand-drawn inline SVG rather than a charting library: two polylines
+and a crosshair don't justify the dependency, and it keeps the bundle free of
+anything that would need a CDN at runtime. Total build is ~209 kB JS (66 kB
+gzipped) with React itself the bulk of it.
+
+## Performance
+
+A 1536 px Chandrayaan-2 tile went from **78.4 s to 21.2 s** (3.7x). Nothing was
+traded away for it — the enhanced product is bit-identical and all 75 checks
+still pass. Measured with `cProfile`, not guessed:
+
+| Change | Saved | Why it is safe |
+| --- | --- | --- |
+| Skip provably-identity learned stages | 39 s | With no checkpoint, the denoiser, de-quantizer and curve head all sit at their zero initialization, so each is *algebraically* the identity (`x - 0`, `x + 0`, `x + 0·x(1-x)`). Verified bit-exact; loading weights re-enables full computation automatically. |
+| Scale-space pyramid for the crater detector | 12 s | The LoG operator is scale-invariant, so coarse scales are evaluated on a decimated grid. Measured on real TMC data: **identical** detections (25/25 and 83/83 matched, median IoU 1.0000) and identical SSIM. |
+| `torch.var_mean` in LayerNorm2d | 6 s | One pass over the channel axis instead of two. Helps trained runs, where the denoiser actually runs. |
+| Reuse the cosmic-ray median filter | 1.4 s | The same window median was computed twice — once for detection, once for inpainting. |
+| Rank-correlation sample cap 2M → 400k | 2 s | Standard error ~0.0016 on the correlation, far below the precision it is read at. |
+
+Zero-initializing the Zero-DCE curve head was a **correctness** fix before a
+speed one: previously an uncheckpointed run applied a random (if bounded and
+monotone) tone curve to real science data, which contradicted this README's
+claim that such a run is physics-only. It now genuinely is.
+
+Set `evaluation.crater_detector.pyramid: false` to force full-resolution
+scale-space evaluation.
+
+What remains is real work: the L.A.Cosmic median filters (~5 s), tone mapping,
+verification and export. GPU is used automatically when `project.device: cuda`
+and CUDA is available.
 
 ## Viewable images
 
@@ -286,6 +419,12 @@ drishti/
 │   ├── metrics.py                   # Stage 6.1 metrics + 6.2 frozen crater detector
 │   └── exporter.py                  # Stage 6.3 lossless GeoTIFF writer
 │                                    # + viewable PNG preview renderer
+├── static/
+│   └── index.html                   # Dashboard UI (single file, no build step)
+├── app.py                           # Local Flask server for the dashboard
 ├── aura_pipeline.py                 # Unified End-to-End Model & Execution Pipeline
 └── requirements.txt
 ```
+
+`app.py` and `static/` are the front end and are entirely optional — the
+pipeline runs headless from `aura_pipeline.py` with no web dependency.

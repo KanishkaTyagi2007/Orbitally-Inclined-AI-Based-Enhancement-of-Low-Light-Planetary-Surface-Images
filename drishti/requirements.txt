@@ -26,6 +26,9 @@ tifffile>=2023.9.26
 # Human-viewable preview rendering (PNG output, contact sheets, labels)
 Pillow>=10.0.0
 
+# Local dashboard front end (app.py). Not needed for the CLI pipeline.
+Flask>=3.0
+
 # Config parsing
 PyYAML>=6.0
 

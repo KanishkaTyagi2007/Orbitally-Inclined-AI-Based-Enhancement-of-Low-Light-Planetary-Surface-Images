@@ -98,7 +98,22 @@ class ImplicitDequantizer(nn.Module):
             feats.append(torch.cos(scaled))
         return torch.cat(feats, dim=0)[None]  # (1, 4F, H, W)
 
+    @property
+    def is_identity(self) -> bool:
+        """
+        True while the output layer is zero-initialized: the field then predicts
+        a zero offset (tanh(0) = 0) and the module returns its input unchanged.
+        Skipping it is exact, and avoids building the Fourier coordinate stack
+        for a result that is bit-identical to the input.
+        """
+        last = self.net[-1]
+        if last.weight.numel() and last.weight.abs().max().item() != 0.0:
+            return False
+        return not (last.bias is not None and last.bias.abs().max().item() != 0.0)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.is_identity:
+            return x
         b, _, h, w = x.shape
         coords = self._coordinate_features(h, w, x.device, x.dtype).expand(b, -1, -1, -1)
         offset = torch.tanh(self.net(torch.cat([x, coords], dim=1)))

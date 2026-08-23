@@ -197,6 +197,48 @@ class TopologicalCraterDetector:
         self.threshold = float(cd["detection_threshold"])
         self.overlap_threshold = float(cd["overlap_threshold"])
         self.match_iou = float(cd["match_iou"])
+        self.pyramid = bool(cd.get("pyramid", True))
+        self.pyramid_min_sigma = float(cd.get("pyramid_min_sigma", 4.0))
+
+    # -- scale space -------------------------------------------------------
+    @staticmethod
+    def _block_mean(image: np.ndarray, k: int) -> np.ndarray:
+        h = int(np.ceil(image.shape[0] / k)) * k
+        w = int(np.ceil(image.shape[1] / k)) * k
+        padded = np.pad(image, ((0, h - image.shape[0]), (0, w - image.shape[1])),
+                        mode="edge")
+        return padded.reshape(h // k, k, w // k, k).mean(axis=(1, 3))
+
+    def _log_response(self, image: np.ndarray, sigma: float) -> np.ndarray:
+        """
+        Scale-normalized Laplacian of Gaussian, sigma^2 * grad^2(G_sigma * I).
+
+        Cost of a separable Gaussian grows linearly with sigma, and the coarse
+        scales dominate: on a 1536 px tile the eight-scale sweep measured 13.9 s
+        of a 39 s run. The operator is scale-invariant, so a coarse scale can be
+        evaluated on a decimated grid -- blur sigma/k on a k-fold block-mean of
+        the image, then resample the response back. The blob it responds to is
+        tens of pixels across, so the k-pixel positional quantisation is far
+        below the feature size.
+
+        Set `pyramid: false` in the config to force full-resolution evaluation
+        at every scale.
+        """
+        if not self.pyramid or sigma <= self.pyramid_min_sigma:
+            return (sigma ** 2 * ndimage.gaussian_laplace(
+                image, sigma, mode="nearest")).astype(np.float32)
+
+        k = int(2 ** np.floor(np.log2(sigma / self.pyramid_min_sigma)))
+        k = int(np.clip(k, 1, 8))
+        if k == 1:
+            return (sigma ** 2 * ndimage.gaussian_laplace(
+                image, sigma, mode="nearest")).astype(np.float32)
+
+        small = self._block_mean(image, k)
+        response = (sigma / k) ** 2 * ndimage.gaussian_laplace(
+            small, sigma / k, mode="nearest")
+        zoomed = ndimage.zoom(response, k, order=1, mode="nearest")
+        return zoomed[:image.shape[0], :image.shape[1]].astype(np.float32)
 
     # -- geometry ----------------------------------------------------------
     @staticmethod
@@ -239,10 +281,7 @@ class TopologicalCraterDetector:
         # float32: the scale space is num_scales x H x W and dominates memory on
         # large products; single precision is far beyond what a detection
         # threshold needs.
-        scale_space = np.stack(
-            [(s ** 2 * ndimage.gaussian_laplace(img, s, mode="nearest")).astype(np.float32)
-             for s in sigmas]
-        )
+        scale_space = np.stack([self._log_response(img, s) for s in sigmas])
 
         # Local maxima in the (scale, y, x) volume.
         peaks = (scale_space == ndimage.maximum_filter(scale_space, size=(3, 3, 3),
@@ -433,6 +472,18 @@ def evaluate_all(raw_reference: np.ndarray, enhanced: np.ndarray, config: dict,
         results["entropy_enhanced"] = histogram_entropy(enhanced, bins)
         results["entropy_gain"] = results["entropy_enhanced"] - results["entropy_raw"]
         results["entropy_bins"] = bins
+
+    if ev_cfg.get("record_histograms", True):
+        # The tonal distributions the entropy figures are derived from, kept so
+        # a reader (or a dashboard) can see *how* the histogram was redistributed
+        # rather than only the single-number entropy delta. Downsampled to 64
+        # bins: enough to show the shape, small enough to sit in a JSON report.
+        chart_bins = int(ev_cfg.get("histogram_bins", 64))
+        for label, image in (("raw", raw_reference), ("enhanced", enhanced)):
+            counts, _ = np.histogram(np.clip(image, 0.0, 1.0),
+                                     bins=chart_bins, range=(0.0, 1.0))
+            results[f"histogram_{label}"] = counts.astype(int).tolist()
+        results["histogram_bins"] = chart_bins
 
     if "ssim" in results:
         threshold = float(ev_cfg["min_acceptable_ssim_vs_raw_structure"])

@@ -175,7 +175,7 @@ verification:
     min_correlation: 0.78
     smoothing_sigma: 1.0
     baseline_sigma: 1.0
-    max_samples: 2000000
+    max_samples: 400000
     weight: 1.0
 uncertainty:
   hidden_channels: 24
@@ -204,6 +204,8 @@ evaluation:
     detection_threshold: 0.06
     overlap_threshold: 0.35
     match_iou: 0.5
+    pyramid: true
+    pyramid_min_sigma: 4.0
 export:
   output_dtype: float32
   compress: deflate

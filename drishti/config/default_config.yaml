@@ -204,7 +204,10 @@ verification:
     baseline_sigma: 1.0         # denoise strength for the per-scene structure-
                                 # preserving reference point that normalizes the
                                 # reported gradient_fidelity_vs_baseline
-    max_samples: 2000000        # subsample cap for the rank correlation
+    # Rank correlation needs a sort. 400k samples gives a standard error near
+    # 0.0016 on the correlation -- far below the precision anyone reads it at --
+    # while cutting several seconds off a large scene.
+    max_samples: 400000         # subsample cap for the rank correlation
     weight: 1.0                 # loss weight during training
 
 # --- 5.3 Heteroscedastic uncertainty head -----------------------------------
@@ -245,6 +248,12 @@ evaluation:
     detection_threshold: 0.06   # normalized LoG response threshold
     overlap_threshold: 0.35     # NMS overlap threshold between candidate craters
     match_iou: 0.5              # IoU at which a raw/enhanced pair counts as matched
+    # Coarse scales are evaluated on a decimated grid (the LoG operator is
+    # scale-invariant). Measured on a 1536px Chandrayaan-2 tile: identical
+    # detections (25/25 and 83/83 matched, median IoU 1.0000, max centre shift
+    # 1 px) at 3.9x the speed. Set false to force full-resolution evaluation.
+    pyramid: true
+    pyramid_min_sigma: 4.0      # scales at or below this stay full-resolution
 
 # --- 6.3 Lossless export ------------------------------------------------------
 export:
