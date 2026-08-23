@@ -1,0 +1,228 @@
+# =============================================================================
+# AURA-NET -- ch2_tmc.yaml
+# Chandrayaan-2 Orbiter, Terrain Mapping Camera 2 (TMC-2), Nadir sensor.
+# Raw processing level (uncalibrated DN), PDS4 product from ISSDC.
+#
+# PROVENANCE OF THE CONSTANTS BELOW
+# ---------------------------------
+# From the PDS4 label (isda:Product_Parameters):
+#   exposure_time_s   0.003236   <- line_exposure_duration 3.236 ms
+#   incidence_deg     39.064886  <- solar_incidence
+#   emission_deg      0.0        <- Nadir sensor; label roll/pitch are ~0.001 deg
+#   bandwidth_um      0.30       <- panchromatic 500-800 nm
+#
+# MEASURED from the product (NOT mission calibration constants):
+#   gain_e_per_dn     33         <- see the note on noise below
+#   read_noise_e      33         <- ~1 DN; not separable from shot noise here
+#
+# UNKNOWN, deliberately left neutral rather than invented:
+#   bias_offset_dn    0          The label gives no bias or dark level. The
+#   black_level_dn    0          default config subtracts 192 DN, which is ABOVE
+#                                this product's global minimum of 130 DN and
+#                                would clip the darkest terrain to zero.
+#                                Subtracting an unknown offset is worse than
+#                                subtracting none.
+#   saturation_dn     4095       Assumes a 12-bit ADC; the label does not state
+#                                the digitisation depth. The product's global
+#                                maximum is 864 DN, so nothing is flagged
+#                                saturated under any plausible assumption.
+#   radiance_scale    1.0        Without the TMC-2 radiometric kernel the output
+#                                is proportional to DN, not SI radiance --
+#                                radiance_units says so, so the GeoTIFF header
+#                                does not carry a false unit claim.
+#
+# NOISE MODEL CAVEAT (affects stage 1.4)
+# --------------------------------------
+# The Anscombe VST assumes independent Poisson-Gaussian noise. This product does
+# not strictly satisfy that: the pixel-scale residual is correlated and
+# anisotropic, measured at lag-1 autocorrelation +0.60 along-track and -0.34
+# across-track -- the expected signature of a TDI pushbroom detector, possibly
+# with on-board MTF compensation. Consequently pixel-scale noise estimators
+# disagree (1.44 DN by Immerkaer, 2.66 DN by median residual), implying a gain
+# anywhere from 33 to 111 e-/DN. The low end is used here: it makes the pipeline
+# assume MORE noise, so the VST and the scrubber behave conservatively, which is
+# the safe direction for a scientific product. Replace all of this with the
+# mission calibration kernel when it is available.
+#
+# The scene is low-CONTRAST rather than photon-starved: measured SNR is ~160 at
+# the scene mean, but the 1st-99th percentile span is only 77 DN in the darker
+# tile, across 324 distinct DN values. De-quantisation (2.1) and tone mapping
+# (4.1) are the stages that matter most here; the denoiser has little to remove.
+# =============================================================================
+
+project:
+  name: AURA-NET (Chandrayaan-2 TMC-2)
+  description: Chandrayaan-2 Orbiter TMC-2 Nadir, raw processing level. Constants below come from the
+    PDS4 label where the label states them, and from measurement of the product itself where it does not.
+    See the comments for which is which.
+  seed: 42
+  device: cuda
+paths:
+  raw_dir: data/raw
+  output_dir: data/output
+  checkpoint_dir: checkpoints
+  log_dir: logs
+io:
+  input_bit_depth: 16
+  input_dtype: uint16
+  working_dtype: float32
+  nodata_value: 0
+  band_index: 1
+  fits_hdu: 0
+calibration:
+  dark_frame_path: null
+  flat_field_path: null
+  gain_e_per_dn: 33.0
+  read_noise_e: 33.0
+  bias_offset_dn: 0
+  black_level_dn: 0
+  saturation_dn: 4095
+  exposure_time_s: 0.003236
+  radiance_scale: 1.0
+  bandwidth_um: 0.3
+  radiance_units: DN-proportional (UNCALIBRATED - no TMC-2 radiometric kernel applied)
+cosmic_ray:
+  enabled: true
+  method: laplacian
+  window_size: 5
+  sigma_threshold: 6.0
+  laplacian_ratio: 2.0
+  max_hit_fraction: 0.02
+  dilate_iterations: 1
+anscombe:
+  apply: true
+  epsilon: 0.375
+  use_generalized: true
+wavelet:
+  family: sym4
+  levels: 2
+  dequant:
+    enabled: true
+    hidden_channels: 16
+    num_layers: 3
+    quantization_step: 1.0
+    fourier_features: 8
+zero_dce:
+  num_iterations: 8
+  num_filters: 32
+  num_conv_layers: 7
+  depthwise: true
+  enforce_monotonic: true
+  target_exposure: 0.6
+  loss_weights:
+    spatial_consistency: 1.0
+    exposure_control: 10.0
+    illumination_smoothness: 200.0
+psf:
+  enabled: true
+  model: gaussian
+  kernel_size: 15
+  sigma_px: 1.1
+  airy_radius_px: 1.5
+  kernel_path: null
+  method: wiener
+  wiener_snr: 12.0
+  rl_iterations: 12
+  max_gain: 2.0
+nafnet:
+  width: 32
+  enc_blocks:
+  - 1
+  - 1
+  - 2
+  middle_blocks: 2
+  dec_blocks:
+  - 1
+  - 1
+  - 1
+  dw_expand: 2
+  ffn_expand: 2
+  residual_noise_subtraction: true
+tone_mapping:
+  enabled: true
+  method: bilateral_log
+  sigma_spatial: 8.0
+  sigma_range: 0.15
+  base_compression: 0.35
+  detail_gain: 1.0
+  highlight_knee: 0.92
+  epsilon: 1.0e-06
+photometric:
+  lommel_seeliger: true
+  incidence_deg: 39.064886
+  emission_deg: 0.0
+  incidence_key: INCIDENCE_ANGLE
+  emission_key: EMISSION_ANGLE
+  incidence_map_path: null
+  emission_map_path: null
+  min_cos: 0.05
+  normalize_to_unit_mean: true
+verification:
+  flux_conservation:
+    enabled: true
+    scales:
+    - 1
+    - 2
+    - 4
+    - 8
+    - 16
+    - 32
+    tolerance: 0.05
+    weight: 1.0
+  gradient_consistency:
+    enabled: true
+    gate: false
+    min_correlation: 0.78
+    smoothing_sigma: 1.0
+    baseline_sigma: 1.0
+    max_samples: 2000000
+    weight: 1.0
+uncertainty:
+  hidden_channels: 24
+  min_log_var: -6.0
+  max_log_var: 4.0
+  trust_map:
+    low_trust_threshold: 0.35
+    hallucination_flag_threshold: 0.2
+    zero_trust_on_saturation: true
+    zero_trust_on_cosmic_ray: true
+evaluation:
+  metrics:
+  - psnr
+  - ssim
+  - niqe
+  - brisque
+  - entropy_gain
+  entropy_bins: 256
+  min_acceptable_ssim_vs_raw_structure: 0.6
+  report_format: json
+  crater_detector:
+    enabled: true
+    min_radius_px: 4
+    max_radius_px: 48
+    num_scales: 8
+    detection_threshold: 0.06
+    overlap_threshold: 0.35
+    match_iou: 0.5
+export:
+  output_dtype: float32
+  compress: deflate
+  predictor: 3
+  preserve_crs: true
+  write_trust_band: true
+  write_trust_sidecar: true
+  preview:
+    enabled: true
+    directory: previews
+    format: png
+    stretch: percentile
+    percentile_low: 2.0
+    percentile_high: 98.0
+    asinh_softening: 0.1
+    bit_depth: 8
+    max_dimension: 4096
+    save_raw: true
+    save_enhanced: true
+    save_trust: true
+    save_comparison: true
+    trust_colormap: true

@@ -1,0 +1,279 @@
+# =============================================================================
+# AURA-NET — default_config.yaml
+# Physics-Constrained Planetary Enhancement Pipeline
+#
+# Central configuration: sensor calibration, physics constants, model
+# hyperparameters, and decision thresholds. Every module reads from this file,
+# so a mission/sensor swap is a config edit, not a code edit.
+#
+# Section order mirrors the pipeline stage order in aura_pipeline.py.
+# =============================================================================
+
+project:
+  name: "AURA-NET"
+  description: >
+    Physics-constrained enhancement pipeline for low-light planetary surface
+    imagery. Improves visibility under low illumination, noise, and limited
+    dynamic range while minimizing hallucinated structure and preserving
+    radiometric + geospatial scientific fidelity.
+  seed: 42
+  device: "cuda"          # "cuda" | "cpu" — falls back to cpu if unavailable
+
+paths:
+  raw_dir: "data/raw"
+  output_dir: "data/output"
+  checkpoint_dir: "checkpoints"
+  log_dir: "logs"
+
+# =============================================================================
+# STAGE 1 — SCIENTIFIC INGESTION & PHYSICS FRONT-END
+# =============================================================================
+
+# --- 1.1 Ingestion -----------------------------------------------------------
+io:
+  input_bit_depth: 16          # native sensor bit depth (PDS4 / FITS / GeoTIFF)
+  input_dtype: "uint16"
+  working_dtype: "float32"
+  nodata_value: 0              # value treated as sensor-invalid / off-frame
+  band_index: 1                # 1-based band to extract from multi-band products
+  fits_hdu: 0                  # HDU index for FITS ingestion
+
+# --- 1.2 Radiometric calibration: DN -> spectral radiance --------------------
+# (DN - bias - black) * gain_e_per_dn        -> electrons
+# (electrons - dark_e) / flat_field          -> corrected electrons
+# corrected / exposure_time_s * radiance_scale
+#     -> spectral radiance [W m^-2 sr^-1 um^-1]
+# Placeholder gains — replace with the mission calibration kernel values.
+calibration:
+  dark_frame_path: null        # optional path to a dark-current frame
+  flat_field_path: null        # optional path to a flat-field frame
+  gain_e_per_dn: 2.3           # electrons per digital number (camera gain)
+  read_noise_e: 4.5            # electron RMS read noise
+  bias_offset_dn: 128          # sensor bias/offset in DN
+  black_level_dn: 64
+  saturation_dn: 65000
+  exposure_time_s: 0.5         # integration time
+  # Radiometric responsivity: spectral radiance produced by 1 e-/s.
+  # Folds pixel solid angle, aperture area, QE and filter bandwidth into one
+  # traceable constant (units: W m^-2 sr^-1 um^-1 per e-/s).
+  radiance_scale: 1.0e-4
+  bandwidth_um: 0.10           # filter FWHM, documented for unit traceability
+  # Declared units of the calibrated output, written to the GeoTIFF header.
+  # If you run without your instrument's radiometric calibration kernel, the
+  # output is NOT SI radiance -- set this to something honest such as
+  # "DN-proportional (uncalibrated)" rather than shipping a false unit claim.
+  radiance_units: "W m^-2 sr^-1 um^-1"
+
+# --- 1.3 Cosmic ray / SEU scrubber ------------------------------------------
+cosmic_ray:
+  enabled: true
+  method: "laplacian"          # "laplacian" (L.A.Cosmic-style) | "sigma_clip_median"
+  window_size: 5               # median-baseline window (both methods)
+  sigma_threshold: 6.0         # robust-sigma rejection threshold
+  laplacian_ratio: 2.0         # min Laplacian/fine-structure ratio to call a hit
+  max_hit_fraction: 0.02       # abort scrub if >2% flagged (likely miscalibration)
+  dilate_iterations: 1         # grow the hit mask to catch charge-bleed skirts
+
+# --- 1.4 Anscombe variance-stabilizing transform ----------------------------
+anscombe:
+  apply: true
+  epsilon: 0.375               # forward: z = 2*sqrt(x + 3/8)
+  # The generalized (Poisson-Gaussian) form folds in the read-noise term from
+  # calibration.read_noise_e so mixed noise maps to unit-variance AWGN.
+  use_generalized: true
+
+# =============================================================================
+# STAGE 2 — FREQUENCY DECOUPLING & DE-QUANTIZATION
+# =============================================================================
+wavelet:
+  family: "sym4"                # SWT wavelet family
+  levels: 2                     # decomposition depth
+  # --- 2.1 Implicit de-quantization (sub-bin continuous offset mapping) ---
+  dequant:
+    enabled: true
+    hidden_channels: 16
+    num_layers: 3
+    quantization_step: 1.0      # ~1 DN step of the original quantizer
+    fourier_features: 8         # positional encoding bands for the implicit field
+
+# =============================================================================
+# STAGE 3A — ILLUMINATION CURVE ESTIMATION (LL band)
+# =============================================================================
+zero_dce:
+  num_iterations: 8             # multi-order recurrent curve applications
+  num_filters: 32
+  num_conv_layers: 7
+  depthwise: true               # Zero-DCE++ depthwise-separable backbone
+  enforce_monotonic: true       # bound curve parameters so each step stays monotonic
+  target_exposure: 0.6          # well-exposed grayscale target (0-1)
+  loss_weights:
+    spatial_consistency: 1.0
+    exposure_control: 10.0
+    illumination_smoothness: 200.0
+
+# =============================================================================
+# STAGE 3B — DETAIL RESTORATION & PSF DECONVOLUTION (LH/HL/HH bands)
+# =============================================================================
+psf:
+  enabled: true
+  model: "gaussian"             # "gaussian" | "airy" | "file"
+  kernel_size: 15
+  sigma_px: 1.1                 # Gaussian PSF sigma (detector pixels)
+  airy_radius_px: 1.5           # first-null radius when model == "airy"
+  kernel_path: null             # measured PSF (.npy) when model == "file"
+  method: "wiener"              # "wiener" | "richardson_lucy"
+  # Assumed SNR of the detail bands. Low-light planetary detail bands are
+  # noise-dominated, so this is deliberately conservative: measured on the
+  # synthetic scene, snr=40 amplified detail-band energy 1.94x and dropped
+  # gradient consistency to 0.80, while snr=12 amplifies 1.10x and holds
+  # consistency at 0.90. Raise it only for genuinely high-SNR products.
+  wiener_snr: 12.0              # regularization: assumed signal-to-noise ratio
+  rl_iterations: 12             # Richardson-Lucy iteration count
+  max_gain: 2.0                 # hard cap on per-frequency amplification
+
+nafnet:
+  width: 32
+  enc_blocks: [1, 1, 2]
+  middle_blocks: 2
+  dec_blocks: [1, 1, 1]
+  dw_expand: 2
+  ffn_expand: 2
+  residual_noise_subtraction: true   # predict noise, subtract (linear path)
+
+# =============================================================================
+# STAGE 4 — DYNAMIC RANGE COMPRESSION & PHOTOMETRIC NORMALIZATION
+# =============================================================================
+tone_mapping:
+  enabled: true
+  method: "bilateral_log"       # bilateral-guided log tone mapping
+  sigma_spatial: 8.0            # bilateral spatial sigma (pixels)
+  sigma_range: 0.15             # bilateral range sigma (log-domain units)
+  base_compression: 0.35        # <1 compresses the base layer (shadow lift)
+  detail_gain: 1.0              # detail-layer gain (1.0 = preserve exactly)
+  highlight_knee: 0.92          # soft-knee onset, protects solar highlights
+  epsilon: 1.0e-6
+
+photometric:
+  lommel_seeliger: true
+  # Illumination geometry. Read from product metadata when the keys below are
+  # present; otherwise these scene-constant fallbacks are used.
+  incidence_deg: 70.0           # theta_i, sun angle from local normal
+  emission_deg: 10.0            # theta_e, spacecraft angle from local normal
+  incidence_key: "INCIDENCE_ANGLE"
+  emission_key: "EMISSION_ANGLE"
+  incidence_map_path: null      # optional per-pixel incidence backplane
+  emission_map_path: null       # optional per-pixel emission backplane
+  min_cos: 0.05                 # floor on cos(theta) — avoids terminator blow-up
+  normalize_to_unit_mean: true  # keep the corrected scene in a comparable range
+
+# =============================================================================
+# STAGE 5 — PHYSICS-BASED VERIFICATION & UNCERTAINTY ESTIMATION
+# =============================================================================
+verification:
+  # --- 5.1 Photometric flux conservation ---
+  # Gated on the STAGE 3C reconstruction (the learned path), not the final
+  # product: stage 4 tone mapping redistributes coarse-scale flux by design and
+  # would otherwise dominate the measurement. Final-image drift is still
+  # reported, ungated, as a diagnostic.
+  flux_conservation:
+    enabled: true
+    scales: [1, 2, 4, 8, 16, 32]  # area-averaging scales (pixels)
+    tolerance: 0.05             # max drift at the coarsest scale
+                                # (measured across 5 synthetic seeds: 0.016-0.029)
+    weight: 1.0                 # loss weight during training
+  # --- 5.2 Sobel gradient consistency ---
+  # REPORTED BY DEFAULT, NOT GATED. Measured across 4 scene sizes (192-512 px)
+  # x 3 seeds x 3 fabrication controls, no formulation of this statistic
+  # supports a fixed threshold: every candidate had some genuine run scoring
+  # below some fabricated one. The decisive control was disabling PSF
+  # deconvolution, leaving only a monotone tone map that provably cannot move
+  # an edge -- it still scored 0.783 at 512 px while fabricated craters at
+  # 192 px scored 0.796. The achievable correlation is set by the scene's
+  # structure-to-noise composition, not by enhancement fidelity.
+  #
+  # Set `gate: true` ONLY after calibrating min_correlation on real imagery
+  # from your instrument, at your typical scene size and terrain type.
+  gradient_consistency:
+    enabled: true               # compute and report the statistic
+    gate: false                 # contribute a pass/fail verdict (see above)
+    min_correlation: 0.78       # only consulted when gate: true
+    smoothing_sigma: 1.0        # Gaussian pre-smoothing; 0 disables (not advised:
+                                # without it the metric tracks photon noise and
+                                # separation from fabricated structure collapses
+                                # entirely -- measured 0.424 vs 0.424)
+    baseline_sigma: 1.0         # denoise strength for the per-scene structure-
+                                # preserving reference point that normalizes the
+                                # reported gradient_fidelity_vs_baseline
+    max_samples: 2000000        # subsample cap for the rank correlation
+    weight: 1.0                 # loss weight during training
+
+# --- 5.3 Heteroscedastic uncertainty head -----------------------------------
+uncertainty:
+  hidden_channels: 24
+  min_log_var: -6.0
+  max_log_var: 4.0
+  trust_map:
+    # trust = exp(-log_var), min-max normalized per-scene to [0, 1]
+    low_trust_threshold: 0.35   # below this: "low scientific confidence"
+    hallucination_flag_threshold: 0.20
+    # Physically un-trustworthy pixels are forced to zero trust regardless of
+    # what the learned head predicts.
+    zero_trust_on_saturation: true
+    zero_trust_on_cosmic_ray: true
+
+# =============================================================================
+# STAGE 6 — SCIENTIFIC METRIC HARNESS & LOSSLESS EXPORT
+# =============================================================================
+evaluation:
+  metrics: ["psnr", "ssim", "niqe", "brisque", "entropy_gain"]
+  entropy_bins: 256             # shared fixed histogram for the entropy gain (dH)
+  # Gross structure-preservation gate. SSIM here is measured against the NOISY
+  # calibrated raw scene, so it is bounded above by the noise the enhancement
+  # is supposed to remove: on the synthetic scene even a plain Gaussian denoise
+  # of the reference against itself only reaches 0.78-0.82. A 0.85 gate is
+  # therefore unreachable by construction. 0.60 catches gross structural
+  # collapse (washout, geometric warp); it is NOT a fine hallucination
+  # detector -- verification.gradient_consistency is the sensitive test.
+  min_acceptable_ssim_vs_raw_structure: 0.60
+  report_format: "json"                        # "json" | "csv"
+  # --- 6.2 Downstream utility proof: frozen topological crater detector ---
+  crater_detector:
+    enabled: true
+    min_radius_px: 4
+    max_radius_px: 48
+    num_scales: 8
+    detection_threshold: 0.06   # normalized LoG response threshold
+    overlap_threshold: 0.35     # NMS overlap threshold between candidate craters
+    match_iou: 0.5              # IoU at which a raw/enhanced pair counts as matched
+
+# --- 6.3 Lossless export ------------------------------------------------------
+export:
+  output_dtype: "float32"       # 32-bit float lossless scientific container
+  compress: "deflate"           # lossless; "lzw" and "none" also valid
+  predictor: 3                  # 3 = floating-point predictor (lossless)
+  preserve_crs: true
+  write_trust_band: true        # band 2 = per-pixel Bayesian trust map
+  write_trust_sidecar: true     # also write standalone *_trust.tif
+
+  # --- Human-viewable preview images ---------------------------------------
+  # The GeoTIFF above holds float32 radiance and shows as a flat grey rectangle
+  # in ordinary image viewers. These are display renderings written alongside
+  # it. They are NOT measurements: each is independently contrast-stretched, so
+  # preview brightness is not proportional to radiance and preview pixels must
+  # never be used for photometry. The limits applied are recorded per run in
+  # the metrics JSON under preview_stretch_limits.
+  preview:
+    enabled: true
+    directory: "previews"       # relative to the run's output directory
+    format: "png"               # lossless; any format Pillow can write
+    stretch: "percentile"       # "percentile" | "minmax" | "asinh"
+    percentile_low: 2.0         # clip limits -- robust to hot pixels and
+    percentile_high: 98.0       # cosmic-ray residuals that wreck a min-max
+    asinh_softening: 0.1        # only used when stretch == "asinh"
+    bit_depth: 8                # 8 or 16 (16 applies to grayscale panels only)
+    max_dimension: 4096         # downscale previews larger than this
+    save_raw: true              # the "before" panel
+    save_enhanced: true         # the "after" panel -- the headline image
+    save_trust: true            # trust map
+    save_comparison: true       # labelled side-by-side contact sheet
+    trust_colormap: true        # viridis (perceptually uniform, CVD-safe)

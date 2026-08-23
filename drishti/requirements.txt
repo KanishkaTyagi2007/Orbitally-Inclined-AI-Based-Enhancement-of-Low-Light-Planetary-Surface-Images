@@ -1,0 +1,45 @@
+# AURA-NET -- Physics-Constrained Planetary Enhancement Pipeline
+# ---------------------------------------------------------------------------
+# Core numerical / deep learning stack
+torch>=2.1.0
+
+# Array / scientific computing
+numpy>=1.24.0
+scipy>=1.11.0            # ndimage (cosmic-ray scrubber, bilateral, LoG), special (Airy PSF)
+
+# Stationary Wavelet Transform (SWT/ISWT) -- stage 2.2 / 3C
+PyWavelets>=1.4.1
+
+# Classical image processing + reference IQA metrics (PSNR, SSIM, entropy)
+scikit-image>=0.22.0
+
+# Geospatial raster I/O: reads/writes GeoTIFF (and PDS3/PDS4/ISIS3 via GDAL),
+# preserves CRS / affine transform / tags -- stages 1.1 and 6.3
+rasterio>=1.3.9
+
+# FITS ingestion -- stage 1.1
+astropy>=5.3
+
+# Plain TIFF fallback reader/writer, dark-frame and flat-field loading
+tifffile>=2023.9.26
+
+# Human-viewable preview rendering (PNG output, contact sheets, labels)
+Pillow>=10.0.0
+
+# Config parsing
+PyYAML>=6.0
+
+# Progress reporting for batch runs
+tqdm>=4.66.0
+
+# ---------------------------------------------------------------------------
+# Optional -- the pipeline runs without these, but reports less
+# ---------------------------------------------------------------------------
+# No-reference IQA. `pyiqa` gives publication-grade, corpus-calibrated NIQE
+# and BRISQUE; `piq` is a lighter BRISQUE-only fallback. Without either,
+# BRISQUE reports null and NIQE falls back to the documented `niqe_lite` proxy.
+piq>=0.8.0
+# pyiqa>=0.1.10
+
+# PDS4 XML-labelled products that GDAL declines to open -- stage 1.1
+# pds4_tools>=1.3

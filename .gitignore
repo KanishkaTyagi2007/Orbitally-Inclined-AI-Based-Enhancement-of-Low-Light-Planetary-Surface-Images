@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Generated products and inputs -- regenerate with `python aura_pipeline.py --demo`
+drishti/data/raw/*
+drishti/data/output/*
+!drishti/data/*/.gitkeep
+
+# Trained weights
+drishti/checkpoints/
+drishti/logs/
