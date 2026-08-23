@@ -146,11 +146,35 @@ class ZeroDCE(nn.Module):
         self.out_conv = conv(c * 2, in_channels)
         self.act = nn.ReLU(inplace=True)
 
+        # Zero-initialize the curve head. With A = 0 the enhancement curve is
+        # LE(x) = x + 0*x*(1-x) = x, so an uncheckpointed pipeline leaves the
+        # illumination band exactly as the physics stages produced it.
+        #
+        # This is a correctness point before it is a speed one: with random
+        # weights the network applies an arbitrary (if bounded and monotone)
+        # tone curve to real science data, which is not something an untrained
+        # model should be doing silently. It also makes the whole stage a
+        # provable identity that `is_identity` can skip.
+        final = self.out_conv.pointwise if isinstance(
+            self.out_conv, DepthwiseSeparableConv) else self.out_conv
+        nn.init.zeros_(final.weight)
+        nn.init.zeros_(final.bias)
+
     # -- the light-enhancement curve --------------------------------------
     @staticmethod
     def enhancement_curve(x: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
         """One monotonic application: LE(x) = x + A*x*(1-x)."""
         return x + a * (x - x.pow(2))
+
+    @property
+    def is_identity(self) -> bool:
+        """True while the curve head is zero-initialized: A = 0 makes every
+        curve application LE(x) = x, so the backbone can be skipped entirely."""
+        final = self.out_conv.pointwise if isinstance(
+            self.out_conv, DepthwiseSeparableConv) else self.out_conv
+        if final.weight.numel() and final.weight.abs().max().item() != 0.0:
+            return False
+        return not (final.bias is not None and final.bias.abs().max().item() != 0.0)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -159,6 +183,10 @@ class ZeroDCE(nn.Module):
         Returns:
             (enhanced in [0, 1], curve_map A in (-1, 1))
         """
+        if self.is_identity:
+            zeros = torch.zeros_like(x)
+            return x.clamp(0.0, 1.0), zeros
+
         feats = []
         h = x
         for enc in self.encoders:

@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "aura-dashboard",
-      "runtimeExecutable": "python",
+      "runtimeExecutable": ".venv\\Scripts\\python.exe",
       "runtimeArgs": ["drishti/app.py"],
       "port": 5000
     }

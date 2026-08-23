@@ -15,3 +15,8 @@ drishti/data/output/_dashboard/
 # Trained weights
 drishti/checkpoints/
 drishti/logs/
+
+# Front-end dependencies. The BUILD OUTPUT in drishti/static/ is deliberately
+# tracked: this is a local scientific tool with no CI, so `python drishti/app.py`
+# has to work straight after a clone, without needing Node installed at all.
+drishti/frontend/node_modules/

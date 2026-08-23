@@ -311,16 +311,19 @@ class CosmicRayScrubber:
         h, w = a.shape[0] // 2, a.shape[1] // 2
         return a.reshape(h, 2, w, 2).mean(axis=(1, 3))
 
-    def _laplacian_detect(self, electrons: np.ndarray) -> np.ndarray:
+    def _laplacian_detect(self, electrons: np.ndarray,
+                          baseline: np.ndarray) -> np.ndarray:
         # 1) sharpness response at 2x sampling. _subsample2 always yields even
         #    dimensions, so _rebin2 returns exactly the native shape.
         sub = self._subsample2(electrons)
         lap = ndimage.convolve(sub, self._LAPLACIAN, mode="nearest")
         L = self._rebin2(np.clip(lap, 0.0, None))
 
-        # 2) per-pixel Poisson+read noise model, in electrons
-        med5 = ndimage.median_filter(electrons, size=self.window, mode="nearest")
-        sigma = np.sqrt(np.clip(med5, 0.0, None) + self.read_noise_e ** 2) + 1e-8
+        # 2) per-pixel Poisson+read noise model, in electrons. `baseline` is the
+        #    window-sized median, computed once by the caller and reused for
+        #    inpainting -- a median filter is the most expensive operation in
+        #    stage 1, so it is not worth running twice.
+        sigma = np.sqrt(np.clip(baseline, 0.0, None) + self.read_noise_e ** 2) + 1e-8
 
         # 3) normalized sharpness, sampling-flux removed
         S = L / (2.0 * sigma)
@@ -334,9 +337,9 @@ class CosmicRayScrubber:
         # 5) joint criterion
         return (S_prime > self.sigma_threshold) & ((L / F) > self.laplacian_ratio)
 
-    def _sigma_clip_detect(self, electrons: np.ndarray) -> np.ndarray:
-        median = ndimage.median_filter(electrons, size=self.window, mode="nearest")
-        residual = electrons - median
+    def _sigma_clip_detect(self, electrons: np.ndarray,
+                           baseline: np.ndarray) -> np.ndarray:
+        residual = electrons - baseline
         mad = np.median(np.abs(residual - np.median(residual))) + 1e-6
         robust_std = 1.4826 * mad
         return np.abs(residual) > (self.sigma_threshold * robust_std)
@@ -350,10 +353,13 @@ class CosmicRayScrubber:
         if not self.enabled:
             return electrons, np.zeros(electrons.shape, dtype=bool)
 
+        # One median filter serves both detection and inpainting.
+        baseline = ndimage.median_filter(electrons, size=self.window, mode="nearest")
+
         if self.method == "laplacian":
-            hit_mask = self._laplacian_detect(electrons)
+            hit_mask = self._laplacian_detect(electrons, baseline)
         else:
-            hit_mask = self._sigma_clip_detect(electrons)
+            hit_mask = self._sigma_clip_detect(electrons, baseline)
 
         if self.dilate_iterations > 0 and hit_mask.any():
             # Grow by one pixel to catch the charge-bleed skirt around a hit.
@@ -373,8 +379,7 @@ class CosmicRayScrubber:
             )
             return electrons, np.zeros(electrons.shape, dtype=bool)
 
-        median = ndimage.median_filter(electrons, size=self.window, mode="nearest")
-        cleaned = np.where(hit_mask, median, electrons)
+        cleaned = np.where(hit_mask, baseline, electrons)
         return cleaned, hit_mask
 
 

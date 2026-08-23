@@ -192,17 +192,42 @@ def choose_primary(paths: list[Path]) -> Path:
     return data[0] if data else paths[0]
 
 
+def check_pds4_pair(primary: Path, uploaded: list[Path]) -> None:
+    """
+    A PDS4 `.img` is a headerless binary: its dimensions, data type and byte
+    order live only in the detached `.xml` label. Handed the binary alone, GDAL
+    declines it and the reader chain falls through to tifffile, which reports
+    "not a TIFF file" -- an error that says nothing about the actual problem.
+
+    Catch that here and say what to do instead, since selecting only the `.img`
+    out of a PDS4 directory is the natural mistake to make.
+    """
+    if primary.suffix.lower() != ".img":
+        return
+    if any(p.suffix.lower() in LABEL_SUFFIXES for p in uploaded):
+        return
+    sibling = primary.with_suffix(".xml").name
+    raise ValueError(
+        f"'{primary.name}' is a PDS4 data file with no label. Its dimensions and "
+        f"data type live in the detached label, so it cannot be read on its own. "
+        f"Select BOTH '{sibling}' and '{primary.name}' together (Ctrl-click, or "
+        f"drop both at once) and upload them in one go."
+    )
+
+
 # =============================================================================
 # Worker
 # =============================================================================
 def run_job(job_id: str, primary: Path, job_dir: Path, config_path: Path,
-            max_dim: int, oversize: str) -> None:
+            max_dim: int, oversize: str, uploaded: Optional[list[Path]] = None) -> None:
     job = JOBS[job_id]
     try:
         with RUN_LOCK:
             job.state = "running"
             job.stage = "Inspecting input"
             job.percent = 2
+
+            check_pds4_pair(primary, uploaded or [primary])
 
             shape = probe_shape(primary)
             if shape:
@@ -338,7 +363,7 @@ def start_run():
 
     threading.Thread(
         target=run_job,
-        args=(job_id, primary, job_dir, config_path, max_dim, oversize),
+        args=(job_id, primary, job_dir, config_path, max_dim, oversize, saved),
         daemon=True,
     ).start()
     return jsonify({"job_id": job_id})
