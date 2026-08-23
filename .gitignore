@@ -9,6 +9,9 @@ drishti/data/raw/*
 drishti/data/output/*
 !drishti/data/*/.gitkeep
 
+# Dashboard job workspace
+drishti/data/output/_dashboard/
+
 # Trained weights
 drishti/checkpoints/
 drishti/logs/

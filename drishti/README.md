@@ -118,6 +118,39 @@ Each run writes into the output directory:
 - `<name>_metrics.json` — every stage-6 metric plus all guardrail verdicts
 - `previews/` — human-viewable PNGs (see below)
 
+## Dashboard
+
+A minimal local web front end, for when you would rather drop a file on a page
+than read a wall of JSON:
+
+```bash
+python app.py
+```
+
+Then open <http://127.0.0.1:5000>. Drop in a scene, pick a sensor config, and it
+runs the pipeline with a live stage-by-stage progress bar, then shows the
+enhanced image, the raw input, the trust map and the side-by-side sheet, the
+full statistics grouped into cards, and download links for the GeoTIFF products
+and the metrics JSON.
+
+Accepts GeoTIFF/TIFF, FITS, PNG/JPEG, and PDS4 (select the `.xml` label and its
+`.img` together — the label is what the reader needs).
+
+Two things it does deliberately:
+
+- **It surfaces the caveats next to the numbers.** Physics-only runs, an
+  uninformative trust map, an ungated gradient guardrail and cropped inputs are
+  all called out as banners. A dashboard that showed only the pretty numbers
+  would undo the work the pipeline does to stay auditable.
+- **It crops big scenes loudly.** The pipeline is full-frame, so a 592-megapixel
+  strip would need tens of GB. Anything above the *Max edge* setting is
+  centre-cropped with a windowed read (never a full decode, and georeferencing
+  is carried across to the crop), and every report says so. Set *If larger* to
+  **Reject** if you would rather be stopped than cropped.
+
+It is a local tool, not a service: it binds to localhost, runs one job at a
+time, keeps job state in memory, and has no authentication. Don't expose it.
+
 ## Viewable images
 
 The GeoTIFF above is the scientific product: 32-bit float radiance in physical
@@ -286,6 +319,12 @@ drishti/
 │   ├── metrics.py                   # Stage 6.1 metrics + 6.2 frozen crater detector
 │   └── exporter.py                  # Stage 6.3 lossless GeoTIFF writer
 │                                    # + viewable PNG preview renderer
+├── static/
+│   └── index.html                   # Dashboard UI (single file, no build step)
+├── app.py                           # Local Flask server for the dashboard
 ├── aura_pipeline.py                 # Unified End-to-End Model & Execution Pipeline
 └── requirements.txt
 ```
+
+`app.py` and `static/` are the front end and are entirely optional — the
+pipeline runs headless from `aura_pipeline.py` with no web dependency.

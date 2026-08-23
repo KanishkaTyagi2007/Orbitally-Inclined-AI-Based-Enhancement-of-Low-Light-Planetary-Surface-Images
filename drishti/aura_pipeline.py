@@ -59,7 +59,7 @@ import json
 import random
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 import torch
@@ -206,7 +206,8 @@ class AuraNetPipeline:
     # -- main entry point ---------------------------------------------------
     @torch.no_grad()
     def process(self, input_path: str, output_dir: Optional[str] = None,
-                preview_dir: Optional[str] = None) -> dict:
+                preview_dir: Optional[str] = None,
+                progress: Optional[Callable[[int, str], None]] = None) -> dict:
         """
         Runs stages 1-6 on one scene.
 
@@ -216,8 +217,13 @@ class AuraNetPipeline:
                 config paths.output_dir.
             preview_dir: where the viewable PNGs go; defaults to the
                 `export.preview.directory` subfolder of `output_dir`.
+            progress: optional callback invoked as progress(percent, stage_label)
+                at each stage boundary. A full-resolution scene takes minutes,
+                so a long-running caller (the dashboard) needs somewhere to read
+                state from. Purely observational -- it cannot alter the result.
         """
         started = time.perf_counter()
+        report = progress or (lambda pct, label: None)
         cfg = self.config
         out_dir = Path(output_dir) if output_dir else self._resolve(cfg["paths"]["output_dir"])
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -226,6 +232,7 @@ class AuraNetPipeline:
         # =====================================================================
         # STAGE 1 -- SCIENTIFIC INGESTION & PHYSICS FRONT-END
         # =====================================================================
+        report(5, "Stage 1: ingestion & physics front-end")
         scene = self.frontend.ingest(input_path)                  # 1.1
         fe = self.frontend.process(scene)                         # 1.2 -> 1.4
         stabilized = fe.stabilized                                # VST domain
@@ -233,12 +240,14 @@ class AuraNetPipeline:
         # =====================================================================
         # STAGE 2 -- FREQUENCY DECOUPLING & DE-QUANTIZATION
         # =====================================================================
+        report(20, "Stage 2: de-quantization & wavelet decomposition")
         dequantized = self.wavelet.dequantize(stabilized, self.device)   # 2.1
         bands, ll, original_shape = self.wavelet.decompose(dequantized)  # 2.2
 
         # =====================================================================
         # STAGE 3A -- ILLUMINATION CURVE ESTIMATION (LL band)
         # =====================================================================
+        report(35, "Stage 3A: illumination curve estimation")
         ll_norm, ll_lo, ll_hi = _minmax_normalize(ll)
         ll_tensor = torch.from_numpy(ll_norm)[None, None].to(self.device)
         ll_enhanced_t, curve_map = self.zero_dce(ll_tensor)
@@ -253,6 +262,7 @@ class AuraNetPipeline:
         # All SWT levels are restored. Every band sits on the native pixel grid
         # (the transform is undecimated), so one shared PSF/denoiser applies to
         # each level identically -- stacked along the batch axis.
+        report(45, "Stage 3B: PSF deconvolution & detail restoration")
         detail_stack = np.stack(
             [np.stack([b.LH, b.HL, b.HH], axis=0) for b in bands], axis=0
         )
@@ -268,6 +278,7 @@ class AuraNetPipeline:
         # =====================================================================
         # STAGE 3C -- FREQUENCY RECOMBINATION
         # =====================================================================
+        report(60, "Stage 3C: frequency recombination")
         reconstructed_vst = self.wavelet.reconstruct(bands, ll_enhanced, original_shape)
         # The inverse VST returns the reconstruction to linear spectral
         # radiance, which is the domain stage 4 photometry is defined in.
@@ -276,6 +287,7 @@ class AuraNetPipeline:
         # =====================================================================
         # STAGE 4 -- DYNAMIC RANGE COMPRESSION & PHOTOMETRIC NORMALIZATION
         # =====================================================================
+        report(68, "Stage 4: tone mapping & photometric normalization")
         toned_radiance, photometric_record = self.photometry.process(
             reconstructed_radiance, scene.metadata
         )                                                          # 4.1 -> 4.2
@@ -285,6 +297,7 @@ class AuraNetPipeline:
         # =====================================================================
         # 5.3 heteroscedastic head, run on a normalized copy so the learned
         # variance is scene-scale independent; mu is mapped back to radiance.
+        report(78, "Stage 5: physics verification & uncertainty")
         toned_norm, t_lo, t_hi = _minmax_normalize(toned_radiance)
         toned_tensor = torch.from_numpy(toned_norm)[None, None].to(self.device)
         mu_t, log_var_t = self.uncertainty_head(toned_tensor)
@@ -313,6 +326,7 @@ class AuraNetPipeline:
         # =====================================================================
         # 6.1 + 6.2 -- both scenes stretched to [0, 1] so full-reference
         # metrics measure structure rather than the intended brightness change.
+        report(85, "Stage 6.1/6.2: metrics & crater detection")
         raw_ref_norm, _, _ = _minmax_normalize(fe.radiance_linear)
         enhanced_norm, _, _ = _minmax_normalize(enhanced_radiance)
         metrics = evaluate_all(raw_ref_norm, enhanced_norm, cfg, trust_map=trust_map)
@@ -342,6 +356,7 @@ class AuraNetPipeline:
         metrics["runtime_seconds"] = round(time.perf_counter() - started, 3)
 
         # 6.3 -- lossless export -------------------------------------------
+        report(94, "Stage 6.3: lossless export & previews")
         exp_cfg = cfg["export"]
         enhanced_path = out_dir / f"{stem}_enhanced.tif"
         export_geotiff(
@@ -381,6 +396,7 @@ class AuraNetPipeline:
             report_format=cfg["evaluation"].get("report_format", "json"),
         )
 
+        report(100, "Complete")
         return {
             "enhanced_path": str(enhanced_path),
             "trust_path": str(trust_path) if trust_path else None,

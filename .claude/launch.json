@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "aura-dashboard",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["drishti/app.py"],
+      "port": 5000
+    }
+  ]
+}
