@@ -127,6 +127,8 @@ class AuraNetPipeline:
         # Set by load_checkpoint. Recorded in the metrics and stamped on the
         # preview so a physics-only run is never mistaken for a trained one.
         self.checkpoint_loaded = False
+        self.checkpoint_name: Optional[str] = None
+        self.checkpoint_audit: Optional[dict] = None
 
         # -- STAGE 1 + 4: physics operators (no learned weights) -----------
         self.frontend = PhysicsFrontend(self.config)
@@ -201,6 +203,14 @@ class AuraNetPipeline:
                 module.load_state_dict(state[key])
                 loaded.append(key)
         self.checkpoint_loaded = bool(loaded)
+        self.checkpoint_name = Path(checkpoint_path).name
+
+        # `train.py` measures the trained weights on products no training phase
+        # ever saw, and stores the result in the checkpoint. Carrying it into
+        # every run's metrics means a reader can see what this model was shown
+        # to do on held-out data without going and finding the training report --
+        # it qualifies the numbers beside it, which is the whole point.
+        self.checkpoint_audit = state.get("audit")
         return loaded
 
     # -- main entry point ---------------------------------------------------
@@ -347,7 +357,12 @@ class AuraNetPipeline:
             "input_shape": list(scene.dn.shape),
             "device": str(self.device),
             "trained_weights_loaded": self.checkpoint_loaded,
+            "checkpoint_name": self.checkpoint_name,
         })
+        if self.checkpoint_audit:
+            # Namespaced, because these describe the *model*, not this scene.
+            metrics.update({f"checkpoint_{k}": v
+                            for k, v in self.checkpoint_audit.items()})
         metrics["all_guardrails_passed"] = bool(
             metrics.get("structure_guardrail_passed", True)
             and metrics.get("physics_verification_passed", True)

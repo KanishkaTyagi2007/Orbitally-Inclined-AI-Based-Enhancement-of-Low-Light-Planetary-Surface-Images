@@ -57,14 +57,32 @@ export function ProvenanceCard({
   const known = GATED_KEYS.filter((k) => m?.[k] !== undefined);
   const passed = known.filter((k) => m?.[k]).length;
 
+  // Which weights ran, and where the illumination geometry came from, are the
+  // two facts that most change how a number should be read: a physics-only run
+  // has identity learned stages, and geometry from the config rather than the
+  // product means the photometric correction used another scene's sun angle.
+  const weights = result?.checkpoint ?? (m?.trained_weights_loaded ? "trained" : "physics only");
+  const geometry =
+    m?.incidence_source === "product_metadata"
+      ? "PDS4 label"
+      : m?.incidence_source === "backplane"
+        ? "backplane"
+        : m?.incidence_source === "config_default"
+          ? "config default"
+          : "—";
+
   const rows: Array<[string, string]> = result
     ? [
         ["Sensor config", result.config || "—"],
+        ["Weights", weights],
+        ["Geometry", geometry],
         ["Guardrails passed", `${passed}/${known.length || "—"}`],
         ["Run conditions", String(noteCount)],
       ]
     : [
         ["Sensor config", "—"],
+        ["Weights", "—"],
+        ["Geometry", "—"],
         ["Guardrails passed", "—"],
         ["Run conditions", "0"],
       ];

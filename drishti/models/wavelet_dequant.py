@@ -112,11 +112,35 @@ class ImplicitDequantizer(nn.Module):
         return not (last.bias is not None and last.bias.abs().max().item() != 0.0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.is_identity:
+        # `self.training` gates the shortcut, not just `is_identity`. The
+        # zero-initialized state is the *starting point* of training, and a
+        # module that returns its input unchanged has no gradient path to its
+        # own weights -- the optimizer would see `element 0 of tensors does not
+        # require grad` and the module could never leave the identity it was
+        # initialized to. In eval mode, which is what the pipeline runs, the
+        # shortcut applies exactly as before.
+        if self.is_identity and not self.training:
             return x
         b, _, h, w = x.shape
         coords = self._coordinate_features(h, w, x.device, x.dtype).expand(b, -1, -1, -1)
-        offset = torch.tanh(self.net(torch.cat([x, coords], dim=1)))
+
+        # The network sees a standardized copy, not the raw signal. Its input
+        # arrives in whatever units stage 1.4 produced -- ~200 for this TMC
+        # product in VST units, ~1e6 if a radiometric kernel put it in SI
+        # radiance -- while the Fourier coordinate channels beside it are
+        # bounded by 1. Feeding both raw makes the image channel swamp the
+        # coordinates by six orders of magnitude and leaves the layer badly
+        # conditioned. Standardizing per sample makes the predicted offset
+        # depend on relative local structure, which is scale-free, so one set
+        # of weights transfers across sensors and processing levels.
+        #
+        # The offset is still added to the raw signal and is still bounded by
+        # tanh * step/2, so the half-bin guarantee is untouched.
+        mean = x.mean(dim=(-2, -1), keepdim=True)
+        std = x.std(dim=(-2, -1), keepdim=True).clamp_min(1e-6)
+        normalized = (x - mean) / std
+
+        offset = torch.tanh(self.net(torch.cat([normalized, coords], dim=1)))
         return x + offset * (self.quant_step / 2.0)
 
 

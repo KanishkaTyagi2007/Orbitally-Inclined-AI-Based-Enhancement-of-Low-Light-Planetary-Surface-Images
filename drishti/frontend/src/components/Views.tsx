@@ -163,12 +163,30 @@ export function GuardrailsView({ result }: { result: JobResult | null }) {
     ["Tone mapping applied", m.tone_mapping_applied],
   ];
 
+  // The checkpoint's own audit, measured during training on products no phase
+  // ever saw. Kept in its own card because it qualifies the model rather than
+  // this scene, and mixing the two would invite reading a held-out number as a
+  // per-run verdict.
+  const model: Row[] = [
+    ["Checkpoint", m.checkpoint_name],
+    ["Held-out tiles", m.checkpoint_held_out_tiles],
+    ["Added structure fraction", m.checkpoint_added_structure_fraction],
+    ["Detail reconstruction", m.checkpoint_detail_reconstruction],
+    ["Zero-synthesis held", m.checkpoint_zero_synthesis_guarantee_held],
+    ["Curve |A| max", m.checkpoint_curve_map_abs_max],
+    ["Log-variance spread", m.checkpoint_log_var_spread],
+    ["Trust map informative", m.checkpoint_trust_map_informative],
+  ];
+
   return (
     <div className="mgrid">
       <StatCard title="Gated — flux conservation" rows={flux} />
       <StatCard title="Gated — structure & synthesis" rows={structure} />
       <StatCard title="Reported — gradient consistency" rows={gradient} />
       <StatCard title="Photometry" rows={photometry} />
+      {model.some(([, value]) => value !== undefined && value !== null) && (
+        <StatCard title="Model — held-out training audit" rows={model} />
+      )}
     </div>
   );
 }

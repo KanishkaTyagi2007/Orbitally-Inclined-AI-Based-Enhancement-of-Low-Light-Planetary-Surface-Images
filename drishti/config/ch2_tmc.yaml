@@ -102,16 +102,53 @@ wavelet:
     num_layers: 3
     quantization_step: 1.0
     fourier_features: 8
+# TARGET EXPOSURE, MEASURED (not the Zero-DCE paper default)
+# ----------------------------------------------------------
+# The paper's 0.6 with weight 10.0 is calibrated for consumer low-light
+# photography, where the curve IS the whole enhancement. Here it is not: stage
+# 4.1 already does the dynamic-range compression, and stage 4.2 the photometric
+# normalization, so 3A only has to lift deep shadow.
+#
+# Measured over 448 training tiles, the normalized LL band has mean 0.286
+# (p5 0.097, p50 0.260, p95 0.578). Asking for 0.6 is a +0.31 lift on every
+# 16x16 patch, and at weight 10.0 that term ran ~14x larger than the spatial
+# consistency term meant to restrain it. Trained that way, stage 3A alone cost
+# a held-out window 0.26 of SSIM (0.813 -> 0.558), destroyed 3 of its 18
+# matched craters and produced 210 spurious detections -- the structure
+# guardrail rejected it, correctly.
+#
+# Retuned twice against the frozen crater detector on a held-out window:
+#
+#   target  weight   SSIM   grad_corr   matched/18   mIoU    guardrails
+#   0.60     10.0    0.525     0.807         15       0.898     FAIL
+#   0.35      2.0    0.823     0.842         16       0.877     pass
+#   0.30      1.0    0.881     0.884         16       0.936     pass  <- shipped
+#
+# The curve LE(x) = x + A*x*(1-x) has derivative 1 + A*(1-2x), so for A > 0 it
+# brightens the shadows and *compresses* everything above x = 0.5. Pushing the
+# target well above the scene's own mean therefore costs highlight contrast.
+# 0.30 sits just above the measured 0.286: enough to lift the terminator-side
+# shadows, little enough to leave the sunlit range alone.
+#
+# KNOWN COST, MEASURED
+# --------------------
+# Stage 3A still loses 2 of 18 matched craters at every setting tried, while
+# the stage-3B detail restorer alone retains all 18 at the highest SSIM of any
+# configuration (0.891 vs 0.881 with 3A included). Highlight compression is
+# intrinsic to the curve, and on TMC scenes stage 4.1 already performs the
+# dynamic-range compression that 3A duplicates. If crater retention matters
+# more than shadow lift for your use, run without stage 3A: load a checkpoint
+# whose 'zero_dce' section is absent, or set num_iterations: 0 here.
 zero_dce:
   num_iterations: 8
   num_filters: 32
   num_conv_layers: 7
   depthwise: true
   enforce_monotonic: true
-  target_exposure: 0.6
+  target_exposure: 0.30
   loss_weights:
     spatial_consistency: 1.0
-    exposure_control: 10.0
+    exposure_control: 1.0
     illumination_smoothness: 200.0
 psf:
   enabled: true

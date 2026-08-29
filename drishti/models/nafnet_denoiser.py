@@ -351,7 +351,14 @@ class NAFNetDenoiser(nn.Module):
         return is_zero_conv(self.ending)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.is_identity:
+        # `self.training` gates the shortcut, not just `is_identity`. The
+        # zero-initialized state is the *starting point* of training, and a
+        # module that returns its input unchanged has no gradient path to its
+        # own weights -- the optimizer would see `element 0 of tensors does not
+        # require grad` and the module could never leave the identity it was
+        # initialized to. In eval mode, which is what the pipeline runs, the
+        # shortcut applies exactly as before.
+        if self.is_identity and not self.training:
             return x
 
         h, w = x.shape[-2:]

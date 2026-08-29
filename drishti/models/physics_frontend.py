@@ -150,6 +150,35 @@ class PlanetaryIngestor:
         )
         return IngestedScene(dn=array, source_format="TIFF (no georeferencing)")
 
+    # -- PDS4 label geometry ------------------------------------------------
+    @staticmethod
+    def _merge_label_metadata(path: str, scene: IngestedScene) -> None:
+        """
+        Folds the PDS4 label's observing geometry into the scene tags.
+
+        GDAL's PDS4 driver returns the raster and the pds: namespace, but not
+        ISSDC's isda: mission dictionary -- which is the only place
+        `solar_incidence` is written. Without this the Lommel-Seeliger stage
+        falls back to the config's scene-constant incidence angle, and across
+        these products that constant is wrong by up to 44 degrees. Existing
+        tags win: a value GDAL actually found in the product outranks one
+        reconstructed from the label.
+        """
+        label = Path(path)
+        if label.suffix.lower() not in (".xml", ".lbl"):
+            label = label.with_suffix(".xml")
+        if not label.is_file():
+            return
+        try:
+            from pds4_bundle import parse_label
+        except ImportError:
+            return
+        product = parse_label(label)
+        if product is None:
+            return
+        for key, value in product.label_metadata().items():
+            scene.metadata.setdefault(key, value)
+
     # -- public entry point -------------------------------------------------
     def read(self, path: str) -> IngestedScene:
         suffix = Path(path).suffix.lower()
@@ -168,6 +197,7 @@ class PlanetaryIngestor:
             if scene is not None:
                 if scene.nodata_mask is None and self.nodata_value is not None:
                     scene.nodata_mask = scene.dn == self.nodata_value
+                self._merge_label_metadata(path, scene)
                 return scene
 
         return self._read_tifffile(path)

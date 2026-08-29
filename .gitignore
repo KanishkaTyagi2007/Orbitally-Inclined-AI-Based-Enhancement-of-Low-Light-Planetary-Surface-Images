@@ -20,3 +20,6 @@ drishti/logs/
 # tracked: this is a local scientific tool with no CI, so `python drishti/app.py`
 # has to work straight after a clone, without needing Node installed at all.
 drishti/frontend/node_modules/
+
+# Training tile cache (regenerate with `python train.py prepare`)
+drishti/data/training/

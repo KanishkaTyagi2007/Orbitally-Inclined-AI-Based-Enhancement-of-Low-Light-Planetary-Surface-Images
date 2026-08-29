@@ -2,7 +2,7 @@
 
 export type ImageKind = "raw" | "enhanced" | "trust" | "comparison";
 export type JobState = "queued" | "running" | "done" | "error";
-export type ViewId = "overview" | "imagery" | "metrics" | "guardrails";
+export type ViewId = "overview" | "pipeline" | "imagery" | "metrics" | "guardrails";
 
 /**
  * The stage-6 metric report. Every field is optional: which metrics exist
@@ -58,6 +58,18 @@ export interface Metrics {
   revealed_crater_mean_trust?: number;
   revealed_crater_min_trust?: number;
 
+  // The trained weights' own held-out audit, copied out of the checkpoint by
+  // `AuraNetPipeline.load_checkpoint`. These describe the MODEL, measured on
+  // products no training phase saw — not this scene.
+  checkpoint_name?: string | null;
+  checkpoint_held_out_tiles?: number;
+  checkpoint_added_structure_fraction?: number | null;
+  checkpoint_detail_reconstruction?: number | null;
+  checkpoint_zero_synthesis_guarantee_held?: boolean;
+  checkpoint_curve_map_abs_max?: number;
+  checkpoint_log_var_spread?: number | null;
+  checkpoint_trust_map_informative?: boolean;
+
   // 5.3 trust + provenance
   mean_trust?: number;
   low_trust_pixel_fraction?: number;
@@ -83,9 +95,42 @@ export interface Metrics {
   [key: string]: unknown;
 }
 
+/** One observational product as `pds4_bundle.Pds4Product.summary` reports it. */
+export interface Pds4Summary {
+  name: string;
+  label_path: string;
+  data_path: string | null;
+  lines: number;
+  samples: number;
+  megapixels: number;
+  data_type: string;
+  processing_level: string;
+  instrument: string;
+  sensor: string;
+  start_time: string;
+  incidence_deg: number | null;
+  emission_deg: number | null;
+  line_exposure_ms: number | null;
+  pixel_resolution_m: number | null;
+  orbit_number: string | null;
+  readable: boolean;
+  warnings: string[];
+}
+
+/** What a path or upload resolved to, before anything is processed. */
+export interface InspectResult {
+  primary: string;
+  product: Pds4Summary | null;
+  candidates: Pds4Summary[];
+  notes: string[];
+  readable?: boolean;
+  shape?: [number, number] | null;
+}
+
 export interface JobResult {
   metrics: Metrics;
   config: string;
+  checkpoint: string | null;
   images: Partial<Record<ImageKind, string>>;
   downloads: {
     enhanced_geotiff?: string;
@@ -104,15 +149,22 @@ export interface Job {
   error: string | null;
   notes: string[];
   result: JobResult | null;
+  source: InspectResult | null;
 }
 
 export interface ConfigList {
   configs: string[];
   default: string | null;
+  checkpoints: string[];
 }
 
 export interface RunOptions {
   config: string;
+  /** Checkpoint filename, or "" for a physics-only run. */
+  checkpoint: string;
   maxDim: number;
   oversize: "crop" | "reject";
 }
+
+/** A run starts from a local path or from uploaded files, never both. */
+export type RunSource = { path: string } | { files: File[] };

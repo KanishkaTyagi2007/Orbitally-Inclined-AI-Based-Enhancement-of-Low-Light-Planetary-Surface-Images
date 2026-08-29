@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getJob, listConfigs, startRun } from "./api";
-import type { Job, RunOptions, ViewId } from "./types";
+import type { Job, RunOptions, RunSource, ViewId } from "./types";
 import { Kpis, StageBars } from "./components/Hero";
 import { HistogramChart } from "./components/HistogramChart";
 import {
@@ -9,11 +9,13 @@ import {
   ProvenanceCard,
   SummaryCard,
 } from "./components/OverviewCards";
+import { PipelineFlow } from "./components/PipelineFlow";
 import { UploadCard } from "./components/UploadCard";
 import { GuardrailsView, ImageryView, MetricsView } from "./components/Views";
 
 const VIEWS: Array<[ViewId, string]> = [
   ["overview", "Overview"],
+  ["pipeline", "Pipeline"],
   ["imagery", "Imagery"],
   ["metrics", "Metrics"],
   ["guardrails", "Guardrails"],
@@ -24,8 +26,10 @@ const POLL_MS = 600;
 export default function App() {
   const [view, setView] = useState<ViewId>("overview");
   const [configs, setConfigs] = useState<string[]>([]);
+  const [checkpoints, setCheckpoints] = useState<string[]>([]);
   const [options, setOptions] = useState<RunOptions>({
     config: "default_config.yaml",
+    checkpoint: "",
     maxDim: 1536,
     oversize: "crop",
   });
@@ -39,7 +43,14 @@ export default function App() {
     listConfigs()
       .then((d) => {
         setConfigs(d.configs);
-        if (d.default) setOptions((o) => ({ ...o, config: d.default! }));
+        setCheckpoints(d.checkpoints ?? []);
+        setOptions((o) => ({
+          ...o,
+          config: d.default ?? o.config,
+          // Default to the newest trained checkpoint when one exists. A
+          // physics-only run is the honest fallback, not the preferred mode.
+          checkpoint: d.checkpoints?.length ? d.checkpoints[d.checkpoints.length - 1] : "",
+        }));
       })
       .catch((e: Error) => setError(`Could not reach the API: ${e.message}`));
   }, []);
@@ -65,12 +76,12 @@ export default function App() {
   }, [jobId, busy]);
 
   const run = useCallback(
-    async (files: File[]) => {
+    async (source: RunSource) => {
       setError(null);
       setJob(null);
       setBusy(true);
       try {
-        const { job_id } = await startRun(files, options);
+        const { job_id } = await startRun(source, options);
         setJobId(job_id);
       } catch (e) {
         setBusy(false);
@@ -150,6 +161,7 @@ export default function App() {
             <CraterBubbles metrics={metrics} />
             <UploadCard
               configs={configs}
+              checkpoints={checkpoints}
               options={options}
               onOptions={setOptions}
               onRun={run}
@@ -158,6 +170,12 @@ export default function App() {
             />
           </div>
         </>
+      )}
+
+      {view === "pipeline" && (
+        <div className="grid g-flow">
+          <PipelineFlow metrics={metrics} />
+        </div>
       )}
 
       {view === "imagery" && <ImageryView jobId={jobId} result={result} />}
