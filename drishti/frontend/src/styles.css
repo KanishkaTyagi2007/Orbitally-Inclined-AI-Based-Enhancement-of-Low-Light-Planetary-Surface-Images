@@ -211,3 +211,48 @@ svg.chart{width:100%;height:clamp(160px,22vw,230px);display:block;overflow:visib
   .tile select,.tile input{min-height:38px;font-size:15px}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* input source: local path vs upload */
+.pathrow{display:flex;gap:8px;align-items:stretch}
+.pathinput{flex:1;min-width:0;background:var(--inner);border:1px solid var(--line);
+  border-radius:var(--r-sm);color:var(--text);font:12.5px var(--mono);
+  padding:11px 12px;outline:none;transition:.16s}
+.pathinput:focus{border-color:var(--blue)}
+.pathrow .pillbtn{flex:none;padding:0 15px}
+.drop-hint{font-size:11.5px;color:var(--dim);line-height:1.5;margin-top:9px}
+.drop-hint .mono{font-family:var(--mono);color:var(--muted)}
+.pillbtn.wide{width:100%;margin-top:9px;padding:9px;text-align:center}
+.probe{margin-top:11px;background:var(--inner);border:1px solid var(--line);
+  border-left:2.5px solid var(--blue);border-radius:var(--r-sm);padding:11px 13px;
+  font-size:12.5px;word-break:break-word}
+.probe.bad{border-left-color:var(--bad);color:var(--bad);font-family:var(--mono);font-size:12px}
+.probe b{font-family:var(--mono);font-size:12px;color:var(--blue-soft)}
+.probemeta{color:var(--muted);margin-top:5px;line-height:1.5}
+.probemeta.dim{color:var(--dim);font-size:11.5px}
+
+/* implementation flow */
+.g-flow{grid-template-columns:minmax(0,1fr)}
+.flowcard svg.flow{display:block;width:100%;max-width:880px;margin:2px auto 0;
+  height:auto;overflow:visible}
+.flownode text{text-anchor:middle;dominant-baseline:middle}
+.flownode rect{transition:.16s}
+.flownode:hover rect:first-of-type{filter:brightness(1.35)}
+text.flowtitle{font:600 14px system-ui,-apple-system,"Segoe UI",sans-serif;fill:var(--text)}
+text.flowio{font:700 11.5px var(--mono);fill:var(--muted);letter-spacing:.09em}
+text.flowdetail{font:12px var(--mono);fill:var(--dim)}
+text.flowstage{font:700 12px var(--mono);fill:var(--muted);text-anchor:start}
+text.flowbadge{font:700 10px system-ui,sans-serif;fill:var(--ok)}
+.flowlegend{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);
+  font-weight:400;flex-wrap:wrap}
+.flowlegend i{width:9px;height:9px;border-radius:3px;display:inline-block;
+  margin-left:8px;border:1px solid}
+.flowlegend i:first-child{margin-left:0}
+.flowlegend i.phys{background:rgba(47,107,255,.14);border-color:var(--blue)}
+.flowlegend i.lrn{background:rgba(79,70,229,.22);border-color:var(--violet)}
+.flowlegend i.grt{background:rgba(55,211,153,.16);border-color:var(--ok)}
+
+@media (max-width:560px){
+  .flowcard h2{flex-direction:column;align-items:flex-start;gap:6px}
+  text.flowtitle{font-size:15px}
+  text.flowdetail{font-size:12.5px}
+}
